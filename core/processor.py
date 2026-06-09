@@ -14,7 +14,6 @@ class Processor:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # If it's a valid video file, read frames
         if fps > 0 and width > 0 and height > 0:
             frames = []
             while True:
@@ -24,27 +23,24 @@ class Processor:
                 frames.append(frame)
             cap.release()
             return frames, (fps, width, height)
-        
-        # If not a valid video, try to read as image
+
         cap.release()
         img = cv2.imread(path)
         if img is None:
-            raise FileNotFoundError(f"Gagal membaca file: {path}")
-            
+            raise FileNotFoundError(f"Failed to read file: {path}")
+
         height, width, _ = img.shape
         total_frames = int(target_fps * duration_sec)
         frames = [img.copy() for _ in range(total_frames)]
         return frames, (target_fps, width, height)
 
-    def apply_transition(self, duration_seconds: float):
-        # Read Source A and Source B
+    def apply_transition(self, duration_seconds: float, effect_name: str = "cross_dissolve_blur"):
         frames_a, props_a = self._read_source(self.path_a)
         frames_b, props_b = self._read_source(self.path_b)
 
         fps, width, height = props_a
         transition_frames = int(fps * duration_seconds)
 
-        # Validate dimensions and fps, resize if necessary
         for i, frame in enumerate(frames_b):
             if frame.shape[1] != width or frame.shape[0] != height:
                 frames_b[i] = cv2.resize(frame, (width, height))
@@ -54,11 +50,11 @@ class Processor:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
 
-        # 1. Source A before transition
         for i in range(main_frames_a):
             out.write(frames_a[i])
 
-        # 2. Process transition frames
+        transition_func = getattr(Transitions, effect_name, Transitions.cross_dissolve_blur)
+
         for i in range(transition_frames):
             idx_a = main_frames_a + i
             idx_b = i
@@ -67,11 +63,11 @@ class Processor:
                 break
 
             alpha = i / (transition_frames - 1) if transition_frames > 1 else 1.0
-            transition_frame = Transitions.cross_dissolve_blur(frames_a[idx_a], frames_b[idx_b], alpha)
+            transition_frame = transition_func(frames_a[idx_a], frames_b[idx_b], alpha)
             out.write(transition_frame)
 
-        # 3. Source B after transition
         for i in range(transition_frames, len(frames_b)):
             out.write(frames_b[i])
 
         out.release()
+        
