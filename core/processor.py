@@ -1,53 +1,77 @@
 import cv2
+import numpy as np
 from core.transitions import Transitions
 
 class Processor:
-    def __init__(self, video_path_a: str, video_path_b: str, output_path: str):
-        self.video_path_a = video_path_a
-        self.video_path_b = video_path_b
+    def __init__(self, path_a: str, path_b: str, output_path: str):
+        self.path_a = path_a
+        self.path_b = path_b
         self.output_path = output_path
 
-    def _get_video_properties(self, cap: cv2.VideoCapture) -> tuple:
+    def _read_source(self, path: str, target_fps: int = 30, duration_sec: float = 3.0) -> tuple[list[np.ndarray], tuple[int, int, int]]:
+        cap = cv2.VideoCapture(path)
         fps = int(cap.get(cv2.CAP_PROP_FPS))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        return fps, width, height
+
+        # If it's a valid video file, read frames
+        if fps > 0 and width > 0 and height > 0:
+            frames = []
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames.append(frame)
+            cap.release()
+            return frames, (fps, width, height)
+        
+        # If not a valid video, try to read as image
+        cap.release()
+        img = cv2.imread(path)
+        if img is None:
+            raise FileNotFoundError(f"Gagal membaca file: {path}")
+            
+        height, width, _ = img.shape
+        total_frames = int(target_fps * duration_sec)
+        frames = [img.copy() for _ in range(total_frames)]
+        return frames, (target_fps, width, height)
 
     def apply_transition(self, duration_seconds: float):
-        cap_a = cv2.VideoCapture(self.video_path_a)
-        cap_b = cv2.VideoCapture(self.video_path_b)
+        # Read Source A and Source B
+        frames_a, props_a = self._read_source(self.path_a)
+        frames_b, props_b = self._read_source(self.path_b)
 
-        fps, width, height = self._get_video_properties(cap_a)
-        total_frames_a = int(cap_a.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps, width, height = props_a
         transition_frames = int(fps * duration_seconds)
-        main_frames_a = total_frames_a - transition_frames
+
+        # Validate dimensions and fps, resize if necessary
+        for i, frame in enumerate(frames_b):
+            if frame.shape[1] != width or frame.shape[0] != height:
+                frames_b[i] = cv2.resize(frame, (width, height))
+
+        main_frames_a = max(0, len(frames_a) - transition_frames)
 
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(self.output_path, fourcc, fps, (width, height))
 
-        for _ in range(main_frames_a):
-            ret, frame = cap_a.read()
-            if not ret:
-                break
-            out.write(frame)
+        # 1. Source A before transition
+        for i in range(main_frames_a):
+            out.write(frames_a[i])
 
+        # 2. Process transition frames
         for i in range(transition_frames):
-            ret_a, frame_a = cap_a.read()
-            ret_b, frame_b = cap_b.read()
+            idx_a = main_frames_a + i
+            idx_b = i
 
-            if not ret_a or not ret_b:
+            if idx_a >= len(frames_a) or idx_b >= len(frames_b):
                 break
 
-            alpha = i / (transition_frames - 1)
-            transition_frame = VideoTransitions.cross_dissolve_blur(frame_a, frame_b, alpha)
+            alpha = i / (transition_frames - 1) if transition_frames > 1 else 1.0
+            transition_frame = Transitions.cross_dissolve_blur(frames_a[idx_a], frames_b[idx_b], alpha)
             out.write(transition_frame)
 
-            while True:
-            ret, frame = cap_b.read()
-            if not ret:
-                break
-            out.write(frame)
+        # 3. Source B after transition
+        for i in range(transition_frames, len(frames_b)):
+            out.write(frames_b[i])
 
-        cap_a.release()
-        cap_b.release()
         out.release()
